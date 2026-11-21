@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>TMA Wheel Tasks</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #181b22;
+      --card-active: #1f242e;
+      --border: rgba(255, 255, 255, 0.08);
+      --accent: #3b82f6;
+      --text: #f3f4f6;
+      --muted: #8b949e;
+      --prio-high: #ef4444;
+      --prio-med: #f59e0b;
+      --prio-low: #10b981;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* Шапка */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      z-index: 10;
+    }
+
+    header h1 {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+    }
+
+    .btn-add-cat {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+
+    .btn-add-cat:active {
+      transform: scale(0.95);
+    }
+
+    /* 3D Барабан категорий (как колесо будильника) */
+    .wheel-wrapper {
+      position: relative;
+      height: 190px;
+      width: 100%;
+      perspective: 900px;
+      overflow: hidden;
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--border);
+      background: radial-gradient(circle at center, rgba(59, 130, 246, 0.07) 0%, transparent 70%);
+    }
+
+    /* Подсветка центральной зоны выбора */
+    .wheel-highlight {
+      position: absolute;
+      top: 50%;
+      left: 16px;
+      right: 16px;
+      height: 58px;
+      transform: translateY(-50%);
+      border-radius: 14px;
+      border: 1px solid rgba(59, 130, 246, 0.45);
+      background: rgba(59, 130, 246, 0.08);
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    .wheel-track {
+      height: 100%;
+      overflow-y: scroll;
+      scroll-snap-type: y mandatory;
+      scrollbar-width: none;
+      padding: 66px 24px; /* (190 - 58) / 2 = 66px для центровки крайних элементов */
+    }
+
+    .wheel-track::-webkit-scrollbar {
+      display: none;
+    }
+
+    .wheel-item {
+      height: 58px;
+      scroll-snap-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      border-radius: 14px;
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text);
+      transition: transform 0.1s linear, opacity 0.1s linear;
+      transform-style: preserve-3d;
+      cursor: pointer;
+    }
+
+    .wheel-item .cat-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .wheel-item .cat-count {
+      font-size: 12px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.06);
+      padding: 2px 8px;
+      border-radius: 99px;
+    }
+
+    .btn-del-cat {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 16px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+
+    .btn-del-cat:hover {
+      color: var(--prio-high);
+    }
+
+    /* Рабочая зона задач активной категории */
+    .tasks-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      overflow: hidden;
+    }
+
+    .add-task-box {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .add-task-box input {
+      flex: 1;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 11px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      outline: none;
+    }
+
+    .add-task-box input:focus {
+      border-color: var(--accent);
+    }
+
+    .prio-select {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 0 10px;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .btn-add-task {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      width: 42px;
+      font-size: 20px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .task-list {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-bottom: 20px;
+    }
+
+    .task-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .task-card.done {
+      opacity: 0.45;
+    }
+
+    .task-card.done .task-text {
+      text-decoration: line-through;
+      color: var(--muted);
+    }
+
+    .task-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      cursor: pointer;
+    }
+
+    .prio-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .prio-high { background: var(--prio-high); box-shadow: 0 0 8px rgba(239,68,68,0.5); }
+    .prio-med  { background: var(--prio-med); }
+    .prio-low  { background: var(--prio-low); }
+
+    .task-text {
+      font-size: 14px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .task-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-prio-cycle, .btn-del-task {
+      background: rgba(255, 255, 255, 0.05);
+      border: none;
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 5px 8px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .btn-del-task:hover {
+      color: var(--prio-high);
+    }
+
+    /* Модалка создания категории */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 50;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal {
+      background: var(--card-active);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      width: 100%;
+      max-width: 340px;
+    }
+
+    .modal h2 {
+      font-size: 16px;
+      margin-bottom: 12px;
+    }
+
+    .modal input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 11px 12px;
+      border-radius: 10px;
+      font-size: 14px;
+      margin-bottom: 14px;
+      outline: none;
+    }
+
+    .modal-btns {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .modal-btns button {
+      padding: 8px 14px;
+      border-radius: 9px;
+      border: none;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .btn-cancel {
+      background: rgba(255,255,255,0.08);
+      color: var(--text);
+    }
+
+    .btn-confirm {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .empty-state {
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 30px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Планы и цели</h1>
+    <button class="btn-add-cat" id="openCatModal">+ Категория</button>
+  </header>
+
+  <!-- Барабан категорий -->
+  <div class="wheel-wrapper">
+    <div class="wheel-highlight"></div>
+    <div class="wheel-track" id="wheelTrack"></div>
+  </div>
+
+  <!-- Список задач выбранной категории -->
+  <div class="tasks-container">
+    <div class="add-task-box">
+      <input type="text" id="taskInput" placeholder="Добавить пункт..." />
+      <select class="prio-select" id="prioSelect" title="Приоритет">
+        <option value="high">Высокий</option>
+        <option value="med" selected>Средний</option>
+        <option value="low">Низкий</option>
+      </select>
+      <button class="btn-add-task" id="addTaskBtn">+</button>
+    </div>
+    <div class="task-list" id="taskList"></div>
+  </div>
+
+  <!-- Модальное окно новой категории -->
+  <div class="modal-backdrop" id="catModal">
+    <div class="modal">
+      <h2>Новая категория</h2>
+      <input type="text" id="catNameInput" placeholder="Например: Планы на лето" maxlength="28" />
+      <div class="modal-btns">
+        <button class="btn-cancel" id="cancelCatBtn">Отмена</button>
+        <button class="btn-confirm" id="saveCatBtn">Создать</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+    }
+
+    const haptic = (type = 'selection') => {
+      try {
+        if (!tg?.HapticFeedback) return;
+        if (type === 'selection') tg.HapticFeedback.selectionChanged();
+        else tg.HapticFeedback.impactOccurred(type);
+      } catch (e) {}
+    };
+
+    const STORAGE_KEY = 'tma_wheel_tasks_v1';
+    const ITEM_HEIGHT = 58;
+
+    let state = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {
+      activeIndex: 0,
+      categories: [
+        {
+          id: 'cat-1',
+          title: 'Планы на лето',
+          tasks: [
+            { id: 't-1', text: 'Съездить на природу с палатками', prio: 'high', done: false },
+            { id: 't-2', text: 'Допилить пет-проект на гитхабе', prio: 'med', done: false }
+          ]
+        },
+        {
+          id: 'cat-2',
+          title: 'Учёба и код',
+          tasks: [
+            { id: 't-3', text: 'Прорешать вариант по информатике', prio: 'high', done: false }
+          ]
+        },
+        {
+          id: 'cat-3',
+          title: 'Покупки',
+          tasks: []
+        }
+      ]
+    };
+
+    const saveState = () => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    };
+
+    const wheelTrack = document.getElementById('wheelTrack');
+    const taskList = document.getElementById('taskList');
+    const taskInput = document.getElementById('taskInput');
+    const prioSelect = document.getElementById('prioSelect');
+
+    // Обновление 3D-перспективы карточек барабана при прокрутке
+    function updateWheel3D() {
+      const items = wheelTrack.querySelectorAll('.wheel-item');
+      const scrollTop = wheelTrack.scrollTop;
+      const newIndex = Math.round(scrollTop / ITEM_HEIGHT);
+
+      if (newIndex !== state.activeIndex && items[newIndex]) {
+        state.activeIndex = newIndex;
+        haptic('selection');
+        renderTasks();
+        saveState();
+      }
+
+      items.forEach((item, idx) => {
+        const offset = (idx * ITEM_HEIGHT - scrollTop) / ITEM_HEIGHT; // 0 в центре, -1 выше, +1 ниже
+        const absOffset = Math.abs(offset);
+        const rotateX = Math.max(-55, Math.min(55, -offset * 28));
+        const scale = Math.max(0.78, 1 - absOffset * 0.12);
+        const opacity = Math.max(0.25, 1 - absOffset * 0.42);
+
+        item.style.transform = `rotateX(${rotateX}deg) scale(${scale})`;
+        item.style.opacity = opacity;
+      });
+    }
+
+    function renderWheel() {
+      wheelTrack.innerHTML = '';
+      if (state.categories.length === 0) {
+        wheelTrack.innerHTML = '<div class="empty-state" style="margin-top:0">Нажми «+ Категория» сверху справа</div>';
+        taskList.innerHTML = '';
+        return;
+      }
+
+      if (state.activeIndex >= state.categories.length) {
+        state.activeIndex = state.categories.length - 1;
+      }
+
+      state.categories.forEach((cat, index) => {
+        const el = document.createElement('div');
+        el.className = 'wheel-item';
+        const activeCount = cat.tasks.filter(t => !t.done).length;
+
+        el.innerHTML = `
+          <span>${escapeHtml(cat.title)}</span>
+          <div class="cat-meta">
+            <span class="cat-count">${activeCount}/${cat.tasks.length}</span>
+            <button class="btn-del-cat" data-index="${index}" title="Удалить категорию">✕</button>
+          </div>
+        `;
+
+        // Клик по карточке плавно докручивает её в центр
+        el.addEventListener('click', (e) => {
+          if (e.target.classList.contains('btn-del-cat')) return;
+          wheelTrack.scrollTo({ top: index * ITEM_HEIGHT, behavior: 'smooth' });
+        });
+
+        wheelTrack.appendChild(el);
+      });
+
+      wheelTrack.scrollTop = state.activeIndex * ITEM_HEIGHT;
+      updateWheel3D();
+      renderTasks();
+    }
+
+    function renderTasks() {
+      taskList.innerHTML = '';
+      const activeCat = state.categories[state.activeIndex];
+      if (!activeCat) return;
+
+      if (activeCat.tasks.length === 0) {
+        taskList.innerHTML = `<div class="empty-state">В категории «${escapeHtml(activeCat.title)}» пока пусто</div>`;
+        return;
+      }
+
+      // Сортировка: сначала невыполненные (по приоритету), затем выполненные
+      const prioWeight = { high: 3, med: 2, low: 1 };
+      const sorted = [...activeCat.tasks].sort((a, b) => {
+        if (a.done !== b.done) return a.done ? 1 : -1;
+        return prioWeight[b.prio] - prioWeight[a.prio];
+      });
+
+      sorted.forEach(task => {
+        const card = document.createElement('div');
+        card.className = `task-card ${task.done ? 'done' : ''}`;
+        const prioLabel = { high: 'Выс', med: 'Сред', low: 'Низ' }[task.prio];
+
+        card.innerHTML = `
+          <div class="task-left" data-id="${task.id}">
+            <span class="prio-dot prio-${task.prio}"></span>
+            <span class="task-text">${escapeHtml(task.text)}</span>
+          </div>
+          <div class="task-actions">
+            <button class="btn-prio-cycle" data-id="${task.id}" title="Сменить приоритет">${prioLabel}</button>
+            <button class="btn-del-task" data-id="${task.id}" title="Удалить">✕</button>
+          </div>
+        `;
+
+        taskList.appendChild(card);
+      });
+    }
+
+    // События барабана
+    wheelTrack.addEventListener('scroll', () => {
+      requestAnimationFrame(updateWheel3D);
+    });
+
+    // Удаление категории
+    wheelTrack.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('btn-del-cat')) return;
+      const idx = Number(e.target.dataset.index);
+      state.categories.splice(idx, 1);
+      if (state.activeIndex >= state.categories.length) {
+        state.activeIndex = Math.max(0, state.categories.length - 1);
+      }
+      haptic('medium');
+      saveState();
+      renderWheel();
+    });
+
+    // Добавление задачи
+    function addTask() {
+      const text = taskInput.value.trim();
+      const activeCat = state.categories[state.activeIndex];
+      if (!text || !activeCat) return;
+
+      activeCat.tasks.push({
+        id: 't-' + Date.now(),
+        text,
+        prio: prioSelect.value,
+        done: false
+      });
+
+      taskInput.value = '';
+      haptic('light');
+      saveState();
+      renderWheel();
+    }
+
+    document.getElementById('addTaskBtn').addEventListener('click', addTask);
+    taskInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') addTask();
+    });
+
+    // Действия с задачами (зачеркнуть, сменить приоритет, удалить)
+    taskList.addEventListener('click', (e) => {
+      const activeCat = state.categories[state.activeIndex];
+      if (!activeCat) return;
+
+      const leftBlock = e.target.closest('.task-left');
+      if (leftBlock) {
+        const task = activeCat.tasks.find(t => t.id === leftBlock.dataset.id);
+        if (task) {
+          task.done = !task.done;
+          haptic('light');
+          saveState();
+          renderWheel();
+        }
+        return;
+      }
+
+      if (e.target.classList.contains('btn-prio-cycle')) {
+        const task = activeCat.tasks.find(t => t.id === e.target.dataset.id);
+        if (task) {
+          const order = ['low', 'med', 'high'];
+          task.prio = order[(order.indexOf(task.prio) + 1) % order.length];
+          haptic('selection');
+          saveState();
+          renderTasks();
+        }
+        return;
+      }
+
+      if (e.target.classList.contains('btn-del-task')) {
+        activeCat.tasks = activeCat.tasks.filter(t => t.id !== e.target.dataset.id);
+        haptic('medium');
+        saveState();
+        renderWheel();
+      }
+    });
+
+    // Модальное окно категорий
+    const catModal = document.getElementById('catModal');
+    const catNameInput = document.getElementById('catNameInput');
+
+    document.getElementById('openCatModal').addEventListener('click', () => {
+      catModal.classList.add('open');
+      catNameInput.value = '';
+      setTimeout(() => catNameInput.focus(), 50);
+    });
+
+    document.getElementById('cancelCatBtn').addEventListener('click', () => {
+      catModal.classList.remove('open');
+    });
+
+    function createCategory() {
+      const title = catNameInput.value.trim();
+      if (!title) return;
+
+      state.categories.push({
+        id: 'cat-' + Date.now(),
+        title,
+        tasks: []
+      });
+      state.activeIndex = state.categories.length - 1;
+      catModal.classList.remove('open');
+      haptic('medium');
+      saveState();
+      renderWheel();
+    }
+
+    document.getElementById('saveCatBtn').addEventListener('click', createCategory);
+    catNameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') createCategory();
+    });
+
+    function escapeHtml(str) {
+      return str.replace(/[&<>"']/g, m => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[m]));
+    }
+
+    renderWheel();
+  </script>
+</body>
+</html>
