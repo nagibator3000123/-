@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>TMA Wheel Tasks</title>
+  <title>TMA Wheel Tasks (Cloud Sync)</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root {
@@ -37,7 +37,6 @@
       user-select: none;
     }
 
-    /* Шапка */
     header {
       display: flex;
       justify-content: space-between;
@@ -47,10 +46,35 @@
       z-index: 10;
     }
 
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     header h1 {
       font-size: 17px;
       font-weight: 600;
       letter-spacing: -0.3px;
+    }
+
+    .sync-badge {
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      background: rgba(16, 185, 129, 0.14);
+      color: #34d399;
+      transition: opacity 0.2s ease;
+    }
+
+    .sync-badge.syncing {
+      background: rgba(59, 130, 246, 0.16);
+      color: #60a5fa;
+    }
+
+    .sync-badge.local {
+      background: rgba(245, 158, 11, 0.14);
+      color: #fbbf24;
     }
 
     .btn-add-cat {
@@ -62,14 +86,13 @@
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
-      transition: transform 0.15s ease, opacity 0.15s ease;
+      transition: transform 0.15s ease;
     }
 
     .btn-add-cat:active {
       transform: scale(0.95);
     }
 
-    /* 3D Барабан категорий (как колесо будильника) */
     .wheel-wrapper {
       position: relative;
       height: 190px;
@@ -81,7 +104,6 @@
       background: radial-gradient(circle at center, rgba(59, 130, 246, 0.07) 0%, transparent 70%);
     }
 
-    /* Подсветка центральной зоны выбора */
     .wheel-highlight {
       position: absolute;
       top: 50%;
@@ -101,7 +123,7 @@
       overflow-y: scroll;
       scroll-snap-type: y mandatory;
       scrollbar-width: none;
-      padding: 66px 24px; /* (190 - 58) / 2 = 66px для центровки крайних элементов */
+      padding: 66px 24px;
     }
 
     .wheel-track::-webkit-scrollbar {
@@ -151,7 +173,6 @@
       color: var(--prio-high);
     }
 
-    /* Рабочая зона задач активной категории */
     .tasks-container {
       flex: 1;
       display: flex;
@@ -277,7 +298,6 @@
       color: var(--prio-high);
     }
 
-    /* Модалка создания категории */
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -356,17 +376,18 @@
 <body>
 
   <header>
-    <h1>Планы и цели</h1>
+    <div class="header-left">
+      <h1>Планы и цели</h1>
+      <span class="sync-badge syncing" id="syncBadge">Sync...</span>
+    </div>
     <button class="btn-add-cat" id="openCatModal">+ Категория</button>
   </header>
 
-  <!-- Барабан категорий -->
   <div class="wheel-wrapper">
     <div class="wheel-highlight"></div>
     <div class="wheel-track" id="wheelTrack"></div>
   </div>
 
-  <!-- Список задач выбранной категории -->
   <div class="tasks-container">
     <div class="add-task-box">
       <input type="text" id="taskInput" placeholder="Добавить пункт..." />
@@ -380,7 +401,6 @@
     <div class="task-list" id="taskList"></div>
   </div>
 
-  <!-- Модальное окно новой категории -->
   <div class="modal-backdrop" id="catModal">
     <div class="modal">
       <h2>Новая категория</h2>
@@ -407,11 +427,14 @@
       } catch (e) {}
     };
 
-    const STORAGE_KEY = 'tma_wheel_tasks_v1';
+    const STORAGE_KEY = 'tma_wheel_tasks_v2';
+    const CHUNK_SIZE = 3800; // Безопасный размер под лимит 4096 байт на ключ в Telegram CloudStorage
     const ITEM_HEIGHT = 58;
+    const syncBadge = document.getElementById('syncBadge');
 
-    let state = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {
+    const defaultState = {
       activeIndex: 0,
+      updatedAt: 0,
       categories: [
         {
           id: 'cat-1',
@@ -427,25 +450,104 @@
           tasks: [
             { id: 't-3', text: 'Прорешать вариант по информатике', prio: 'high', done: false }
           ]
-        },
-        {
-          id: 'cat-3',
-          title: 'Покупки',
-          tasks: []
         }
       ]
     };
 
-    const saveState = () => {
+    let state = JSON.parse(localStorage.getItem(STORAGE_KEY)) || structuredClone(defaultState);
+
+    function setSyncStatus(mode, text) {
+      syncBadge.className = `sync-badge ${mode}`;
+      syncBadge.textContent = text;
+    }
+
+    // Проверка доступности CloudStorage (работает в Telegram Bot API 6.9+)
+    const hasCloud = Boolean(tg?.CloudStorage && tg.isVersionAtLeast?.('6.9'));
+
+    // Сохранение с разбивкой на чанки в CloudStorage + мгновенный кэш в localStorage
+    let saveTimer = null;
+    function saveState(syncToCloud = true) {
+      state.updatedAt = Date.now();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    };
+
+      if (!syncToCloud || !hasCloud) {
+        if (!hasCloud) setSyncStatus('local', 'Local');
+        return;
+      }
+
+      setSyncStatus('syncing', 'Sync...');
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        const raw = JSON.stringify(state);
+        const chunks = [];
+        for (let i = 0; i < raw.length; i += CHUNK_SIZE) {
+          chunks.push(raw.slice(i, i + CHUNK_SIZE));
+        }
+
+        tg.CloudStorage.setItem(`${STORAGE_KEY}_meta`, String(chunks.length), (err) => {
+          if (err) {
+            setSyncStatus('local', 'Local');
+            return;
+          }
+          let doneCount = 0;
+          chunks.forEach((chunk, idx) => {
+            tg.CloudStorage.setItem(`${STORAGE_KEY}_c${idx}`, chunk, (cErr) => {
+              doneCount++;
+              if (cErr) setSyncStatus('local', 'Local');
+              else if (doneCount === chunks.length) setSyncStatus('', 'Cloud ✓');
+            });
+          });
+        });
+      }, 350);
+    }
+
+    // Загрузка данных из облака Telegram при старте
+    function loadFromCloud() {
+      if (!hasCloud) {
+        setSyncStatus('local', 'Local');
+        return;
+      }
+
+      setSyncStatus('syncing', 'Sync...');
+      tg.CloudStorage.getItem(`${STORAGE_KEY}_meta`, (err, countStr) => {
+        if (err) {
+          setSyncStatus('local', 'Local');
+          return;
+        }
+        const count = Number(countStr);
+        if (!count) {
+          // Если в облаке ещё пусто — пушим текущее локальное состояние туда
+          saveState(true);
+          return;
+        }
+
+        const keys = Array.from({ length: count }, (_, i) => `${STORAGE_KEY}_c${i}`);
+        tg.CloudStorage.getItems(keys, (itemsErr, items) => {
+          if (itemsErr || !items) {
+            setSyncStatus('local', 'Local');
+            return;
+          }
+          try {
+            const fullRaw = keys.map(k => items[k] || '').join('');
+            const cloudState = JSON.parse(fullRaw);
+            if (cloudState && Array.isArray(cloudState.categories)) {
+              state = cloudState;
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+              renderWheel();
+            }
+            setSyncStatus('', 'Cloud ✓');
+          } catch (e) {
+            setSyncStatus('local', 'Local');
+          }
+        });
+      });
+    }
 
     const wheelTrack = document.getElementById('wheelTrack');
     const taskList = document.getElementById('taskList');
     const taskInput = document.getElementById('taskInput');
     const prioSelect = document.getElementById('prioSelect');
 
-    // Обновление 3D-перспективы карточек барабана при прокрутке
     function updateWheel3D() {
       const items = wheelTrack.querySelectorAll('.wheel-item');
       const scrollTop = wheelTrack.scrollTop;
@@ -455,11 +557,11 @@
         state.activeIndex = newIndex;
         haptic('selection');
         renderTasks();
-        saveState();
+        saveState(true);
       }
 
       items.forEach((item, idx) => {
-        const offset = (idx * ITEM_HEIGHT - scrollTop) / ITEM_HEIGHT; // 0 в центре, -1 выше, +1 ниже
+        const offset = (idx * ITEM_HEIGHT - scrollTop) / ITEM_HEIGHT;
         const absOffset = Math.abs(offset);
         const rotateX = Math.max(-55, Math.min(55, -offset * 28));
         const scale = Math.max(0.78, 1 - absOffset * 0.12);
@@ -495,7 +597,6 @@
           </div>
         `;
 
-        // Клик по карточке плавно докручивает её в центр
         el.addEventListener('click', (e) => {
           if (e.target.classList.contains('btn-del-cat')) return;
           wheelTrack.scrollTo({ top: index * ITEM_HEIGHT, behavior: 'smooth' });
@@ -519,7 +620,6 @@
         return;
       }
 
-      // Сортировка: сначала невыполненные (по приоритету), затем выполненные
       const prioWeight = { high: 3, med: 2, low: 1 };
       const sorted = [...activeCat.tasks].sort((a, b) => {
         if (a.done !== b.done) return a.done ? 1 : -1;
@@ -546,12 +646,10 @@
       });
     }
 
-    // События барабана
     wheelTrack.addEventListener('scroll', () => {
       requestAnimationFrame(updateWheel3D);
     });
 
-    // Удаление категории
     wheelTrack.addEventListener('click', (e) => {
       if (!e.target.classList.contains('btn-del-cat')) return;
       const idx = Number(e.target.dataset.index);
@@ -560,11 +658,10 @@
         state.activeIndex = Math.max(0, state.categories.length - 1);
       }
       haptic('medium');
-      saveState();
+      saveState(true);
       renderWheel();
     });
 
-    // Добавление задачи
     function addTask() {
       const text = taskInput.value.trim();
       const activeCat = state.categories[state.activeIndex];
@@ -579,7 +676,7 @@
 
       taskInput.value = '';
       haptic('light');
-      saveState();
+      saveState(true);
       renderWheel();
     }
 
@@ -588,7 +685,6 @@
       if (e.key === 'Enter') addTask();
     });
 
-    // Действия с задачами (зачеркнуть, сменить приоритет, удалить)
     taskList.addEventListener('click', (e) => {
       const activeCat = state.categories[state.activeIndex];
       if (!activeCat) return;
@@ -599,7 +695,7 @@
         if (task) {
           task.done = !task.done;
           haptic('light');
-          saveState();
+          saveState(true);
           renderWheel();
         }
         return;
@@ -611,7 +707,7 @@
           const order = ['low', 'med', 'high'];
           task.prio = order[(order.indexOf(task.prio) + 1) % order.length];
           haptic('selection');
-          saveState();
+          saveState(true);
           renderTasks();
         }
         return;
@@ -620,12 +716,11 @@
       if (e.target.classList.contains('btn-del-task')) {
         activeCat.tasks = activeCat.tasks.filter(t => t.id !== e.target.dataset.id);
         haptic('medium');
-        saveState();
+        saveState(true);
         renderWheel();
       }
     });
 
-    // Модальное окно категорий
     const catModal = document.getElementById('catModal');
     const catNameInput = document.getElementById('catNameInput');
 
@@ -651,7 +746,7 @@
       state.activeIndex = state.categories.length - 1;
       catModal.classList.remove('open');
       haptic('medium');
-      saveState();
+      saveState(true);
       renderWheel();
     }
 
@@ -666,7 +761,9 @@
       }[m]));
     }
 
+    // Сначала мгновенно рисуем из кэша, затем подтягиваем свежие данные из облака Telegram
     renderWheel();
+    loadFromCloud();
   </script>
 </body>
 </html>
